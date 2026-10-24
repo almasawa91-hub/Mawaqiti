@@ -93,11 +93,13 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
         locating = true
         locationMsg = null
         try {
-            LocationManagerCompat.getCurrentLocation(lm, provider, null, ContextCompat.getMainExecutor(ctx)) { loc ->
+            val signal: android.os.CancellationSignal? = null
+            val consumer = androidx.core.util.Consumer<Location?> { loc ->
                 locating = false
                 if (loc != null) applyLocation(loc)
                 else if (last == null) locationMsg = "تعذر تحديد الموقع. حاول مرة أخرى أو اختر مدينة."
             }
+            LocationManagerCompat.getCurrentLocation(lm, provider, signal, ContextCompat.getMainExecutor(ctx), consumer)
         } catch (e: Exception) {
             locating = false
             if (last == null) locationMsg = "تعذر تحديد الموقع. اختر مدينة يدوياً."
