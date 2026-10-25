@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
@@ -24,6 +25,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
+import kotlin.math.abs
 
 val TasbeehPhrases = listOf(
     "سُبْحَانَ اللَّهِ",
@@ -72,6 +74,10 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     init {
+        if (settings.place.startsWith("موقعي (")) {
+            settings = settings.copy(place = "موقعي الحالي")
+            prefs.save(settings)
+        }
         recompute()
         Notifier.ensureChannel(app)
         PrayerScheduler.scheduleNext(app)
@@ -157,8 +163,14 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun applyLocation(loc: Location) {
         val near = Cities.minByOrNull { PrayerCalc.distanceKm(loc.latitude, loc.longitude, it.lat, it.lon) }
         val dist = near?.let { PrayerCalc.distanceKm(loc.latitude, loc.longitude, it.lat, it.lon) } ?: 1e9
-        val place = if (near != null && dist < 60) near.name
-        else String.format(Locale.US, "موقعي (%.2f, %.2f)", loc.latitude, loc.longitude)
+        // نحتفظ بالاسم الحالي إن بقي المستخدم في نفس المكان تقريباً
+        val keep = settings.gps && settings.place != "موقعي الحالي" &&
+            PrayerCalc.distanceKm(settings.lat, settings.lon, loc.latitude, loc.longitude) < 3
+        val place = when {
+            keep -> settings.place
+            near != null && dist < 40 -> near.name
+            else -> "موقعي الحالي"
+        }
         val method = if (!settings.located && near != null && dist < 400) near.method else settings.method
         update(
             settings.copy(
@@ -166,6 +178,39 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
                 tz = ZoneId.systemDefault().id, located = true, gps = true, method = method
             )
         )
+        resolveName(loc.latitude, loc.longitude)
+    }
+
+    /** يحاول جلب اسم المنطقة (مدينة، دولة) بالعربية؛ إن لم تتوفر الخدمة يبقى الاسم الحالي */
+    private fun resolveName(lat: Double, lon: Double) {
+        val ctx = getApplication<Application>()
+        if (!Geocoder.isPresent()) return
+        viewModelScope.launch {
+            val name: String? = withContext(Dispatchers.IO) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val list = Geocoder(ctx, Locale("ar")).getFromLocation(lat, lon, 1)
+                    val a = list?.firstOrNull()
+                    if (a == null) {
+                        null
+                    } else {
+                        val primary = a.locality ?: a.subAdminArea ?: a.adminArea
+                        val country = a.countryName
+                        when {
+                            primary.isNullOrBlank() -> country
+                            country.isNullOrBlank() || country == primary -> primary
+                            else -> "$primary، $country"
+                        }
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            val s = settings
+            if (!name.isNullOrBlank() && s.gps && abs(s.lat - lat) < 1e-6 && abs(s.lon - lon) < 1e-6 && s.place != name) {
+                updateUi(s.copy(place = name))
+            }
+        }
     }
 
     // ───── الأذان ─────

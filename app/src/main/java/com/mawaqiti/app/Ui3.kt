@@ -204,7 +204,7 @@ fun SettingsScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif
                 SectionCard("الموقع") {
                     Text(s.place, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        String.format(Locale.US, "%.3f ، %.3f", s.lat, s.lon),
+                        if (s.gps) "حسب موقعك الحالي" else "مدينة مختارة يدوياً",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (vm.locating) LinearProgressIndicator(Modifier.fillMaxWidth())
