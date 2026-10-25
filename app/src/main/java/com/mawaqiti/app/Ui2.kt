@@ -13,7 +13,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.WbSunny
@@ -208,14 +212,18 @@ private fun azkarIcon(i: Int): ImageVector = when (i) {
     1 -> Icons.Filled.NightsStay
     2 -> Icons.Filled.Done
     3 -> Icons.Filled.Bedtime
-    else -> Icons.Filled.WbTwilight
+    4 -> Icons.Filled.WbTwilight
+    else -> Icons.Filled.MenuBook
 }
 
 @Composable
-fun AzkarScreen() {
+fun AzkarScreen(vm: PrayerViewModel) {
     var sel by rememberSaveable { mutableIntStateOf(-1) }
     if (sel < 0) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Text("الأذكار", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             AzkarData.categories.forEachIndexed { i, c ->
                 Card(
@@ -235,12 +243,15 @@ fun AzkarScreen() {
         }
     } else {
         BackHandler { sel = -1 }
-        AzkarDetail(AzkarData.categories[sel]) { sel = -1 }
+        AzkarDetail(
+            AzkarData.categories[sel], vm.settings.azkarFont,
+            onFont = { vm.updateUi(vm.settings.copy(azkarFont = it.coerceIn(16, 34))) }
+        ) { sel = -1 }
     }
 }
 
 @Composable
-fun AzkarDetail(cat: AzkarCategory, onBack: () -> Unit) {
+fun AzkarDetail(cat: AzkarCategory, fontSize: Int, onFont: (Int) -> Unit, onBack: () -> Unit) {
     val remaining = remember(cat.title) { mutableStateListOf<Int>().apply { addAll(cat.items.map { it.count }) } }
     val haptic = LocalHapticFeedback.current
     val done = remaining.count { it == 0 }
@@ -252,6 +263,8 @@ fun AzkarDetail(cat: AzkarCategory, onBack: () -> Unit) {
                 Text(cat.title, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text("$done من ${cat.items.size}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            TextButton(onClick = { onFont(fontSize - 2) }) { Text("A-") }
+            TextButton(onClick = { onFont(fontSize + 2) }) { Text("A+") }
             IconButton(onClick = { cat.items.forEachIndexed { i, d -> remaining[i] = d.count } }) {
                 Icon(Icons.Filled.Refresh, "إعادة")
             }
@@ -279,7 +292,7 @@ fun AzkarDetail(cat: AzkarCategory, onBack: () -> Unit) {
                     )
                 ) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(d.text, fontSize = 20.sp, lineHeight = 34.sp, textAlign = TextAlign.Center)
+                        Text(d.text, fontSize = fontSize.sp, lineHeight = (fontSize * 1.7f).sp, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(10.dp))
                         Box(
                             Modifier.size(46.dp).clip(CircleShape)
@@ -308,7 +321,8 @@ fun AzkarDetail(cat: AzkarCategory, onBack: () -> Unit) {
 fun TasbeehScreen(vm: PrayerViewModel) {
     var target by rememberSaveable { mutableIntStateOf(33) }
     val haptic = LocalHapticFeedback.current
-    val count = vm.tasbeeh
+    val idx = vm.tasbeehIndex
+    val count = vm.tasbeehCounts[idx]
     val progress = if (target > 0) (count % target).toFloat() / target else 0f
 
     Column(
@@ -316,7 +330,13 @@ fun TasbeehScreen(vm: PrayerViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("المسبحة", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            itemsIndexed(TasbeehPhrases) { i, t ->
+                FilterChip(selected = idx == i, onClick = { vm.selectTasbeeh(i) }, label = { Text(t) })
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(33, 99, 100, 0).forEach { t ->
                 FilterChip(
@@ -326,7 +346,12 @@ fun TasbeehScreen(vm: PrayerViewModel) {
                 )
             }
         }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(16.dp))
+        Text(
+            TasbeehPhrases[idx], fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(16.dp))
         Box(contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
                 progress = { progress },
@@ -355,11 +380,11 @@ fun TasbeehScreen(vm: PrayerViewModel) {
                 }
             }
         }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
         OutlinedButton(onClick = { vm.resetTasbeeh() }) {
             Icon(Icons.Filled.Refresh, null, Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text("تصفير العداد")
+            Text("تصفير هذا الذكر")
         }
     }
 }

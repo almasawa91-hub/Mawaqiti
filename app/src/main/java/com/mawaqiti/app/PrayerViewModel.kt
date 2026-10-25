@@ -7,17 +7,32 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
+
+val TasbeehPhrases = listOf(
+    "سُبْحَانَ اللَّهِ",
+    "الْحَمْدُ لِلَّهِ",
+    "اللَّهُ أَكْبَرُ",
+    "لَا إِلَهَ إِلَّا اللَّهُ",
+    "أَسْتَغْفِرُ اللَّهَ",
+    "اللَّهُمَّ صَلِّ عَلَى مُحَمَّدٍ"
+)
 
 class PrayerViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -35,7 +50,25 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var locationMsg by mutableStateOf<String?>(null)
         private set
-    var tasbeeh by mutableIntStateOf(prefs.tasbeeh)
+
+    // المسبحة
+    var tasbeehIndex by mutableIntStateOf(0)
+        private set
+    val tasbeehCounts = mutableStateListOf<Int>().apply {
+        addAll(TasbeehPhrases.indices.map { prefs.tasbeehCount(it) })
+    }
+
+    // الأذان والمؤذنون
+    var customAdhans by mutableStateOf(AdhanSources.customs(app))
+        private set
+    var adhanMsg by mutableStateOf<String?>(null)
+        private set
+    var previewId by mutableStateOf<String?>(null)
+        private set
+    private val previewPlayer = AdhanPlayer(app)
+
+    // متتبع الصلوات
+    var trackerVersion by mutableIntStateOf(0)
         private set
 
     init {
@@ -44,20 +77,30 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
         PrayerScheduler.scheduleNext(app)
     }
 
+    fun zone(): ZoneId = runCatching { ZoneId.of(settings.tz) }.getOrDefault(ZoneId.systemDefault())
+
     fun recompute() {
         val s = settings
-        val zone = runCatching { ZoneId.of(s.tz) }.getOrDefault(ZoneId.systemDefault())
-        val d = LocalDate.now(zone)
+        val d = LocalDate.now(zone())
         todayDate = d
         today = PrayerCalc.forSettings(d, s)
         tomorrow = PrayerCalc.forSettings(d.plusDays(1), s)
     }
 
+    /** تغيير يؤثر على المواقيت/التنبيهات */
     fun update(new: Settings) {
         settings = new
         prefs.save(new)
         recompute()
         PrayerScheduler.scheduleNext(getApplication())
+        NextPrayerWidget.updateAll(getApplication())
+    }
+
+    /** تغيير شكلي فقط (مظهر، خط، نظام الساعة) */
+    fun updateUi(new: Settings) {
+        settings = new
+        prefs.save(new)
+        NextPrayerWidget.updateAll(getApplication())
     }
 
     fun setMessage(m: String?) {
@@ -65,7 +108,12 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectCity(c: City) {
-        update(settings.copy(lat = c.lat, lon = c.lon, place = c.name, tz = c.tz, located = true, gps = false, method = c.method))
+        update(
+            settings.copy(
+                lat = c.lat, lon = c.lon, place = c.name, tz = c.tz,
+                located = true, gps = false, method = c.method
+            )
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -120,14 +168,98 @@ class PrayerViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    // ───── الأذان ─────
+    fun setAdhan(id: String) {
+        updateUi(settings.copy(adhan = id))
+    }
+
+    fun setFajrAdhan(id: String) {
+        updateUi(settings.copy(fajrAdhan = id))
+    }
+
+    fun addCustomAdhan(uri: Uri) {
+        adhanMsg = null
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) { AdhanSources.importAdhan(getApplication(), uri) }
+            if (r == null) {
+                adhanMsg = "تعذّرت إضافة الملف. تأكد أنه ملف صوتي سليم وحجمه أقل من 15 ميغابايت."
+            } else {
+                customAdhans = AdhanSources.customs(getApplication())
+                adhanMsg = "تمت إضافة: ${r.second}"
+                if (settings.adhan == "off") updateUi(settings.copy(adhan = r.first))
+            }
+        }
+    }
+
+    fun deleteCustomAdhan(id: String) {
+        stopPreview()
+        AdhanSources.delete(getApplication(), id)
+        customAdhans = AdhanSources.customs(getApplication())
+        var s = settings
+        if (s.adhan == id) s = s.copy(adhan = "off")
+        if (s.fajrAdhan == id) s = s.copy(fajrAdhan = "")
+        updateUi(s)
+    }
+
+    fun preview(id: String) {
+        if (previewId == id) {
+            stopPreview()
+            return
+        }
+        stopPreview()
+        if (id.isEmpty() || id == "off") return
+        val ok = previewPlayer.play(id) { previewId = null }
+        previewId = if (ok) id else null
+        if (!ok) adhanMsg = "تعذّر تشغيل هذا الملف."
+    }
+
+    fun stopPreview() {
+        previewPlayer.stop()
+        previewId = null
+    }
+
+    fun clearAdhanMsg() {
+        adhanMsg = null
+    }
+
+    override fun onCleared() {
+        previewPlayer.stop()
+        super.onCleared()
+    }
+
+    // ───── المسبحة ─────
+    fun selectTasbeeh(i: Int) {
+        tasbeehIndex = i.coerceIn(0, TasbeehPhrases.lastIndex)
+    }
+
     fun bumpTasbeeh(): Int {
-        tasbeeh += 1
-        prefs.tasbeeh = tasbeeh
-        return tasbeeh
+        val n = tasbeehCounts[tasbeehIndex] + 1
+        tasbeehCounts[tasbeehIndex] = n
+        prefs.setTasbeehCount(tasbeehIndex, n)
+        return n
     }
 
     fun resetTasbeeh() {
-        tasbeeh = 0
-        prefs.tasbeeh = 0
+        tasbeehCounts[tasbeehIndex] = 0
+        prefs.setTasbeehCount(tasbeehIndex, 0)
+    }
+
+    // ───── متتبع الصلوات ─────
+    fun trackerMask(d: LocalDate): Int = prefs.trackerMask(d)
+
+    fun toggleTrack(d: LocalDate, bit: Int) {
+        prefs.setTrackerMask(d, prefs.trackerMask(d) xor (1 shl bit))
+        trackerVersion += 1
+    }
+
+    fun streak(): Int {
+        var d = LocalDate.now(zone())
+        if (prefs.trackerMask(d) != 31) d = d.minusDays(1)
+        var n = 0
+        while (prefs.trackerMask(d) == 31 && n < 3650) {
+            n += 1
+            d = d.minusDays(1)
+        }
+        return n
     }
 }

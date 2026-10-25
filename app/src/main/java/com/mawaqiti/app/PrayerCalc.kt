@@ -1,5 +1,6 @@
 package com.mawaqiti.app
 
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -108,20 +109,61 @@ object PrayerCalc {
     }
 
     // ---------- public API ----------
-    fun hijri(date: LocalDate): Triple<Int, Int, Int>? = runCatching {
-        val h = HijrahChronology.INSTANCE.date(date)
+    fun hijri(date: LocalDate, offset: Int = 0): Triple<Int, Int, Int>? = runCatching {
+        val h = HijrahChronology.INSTANCE.date(date.plusDays(offset.toLong()))
         Triple(h.get(ChronoField.YEAR), h.get(ChronoField.MONTH_OF_YEAR), h.get(ChronoField.DAY_OF_MONTH))
     }.getOrNull()
 
-    fun hijriText(date: LocalDate): String {
-        val h = hijri(date) ?: return ""
+    fun hijriText(date: LocalDate, offset: Int = 0): String {
+        val h = hijri(date, offset) ?: return ""
         return "${h.third} ${HijriMonths[(h.second - 1).coerceIn(0, 11)]} ${h.first} هـ"
+    }
+
+    /** تواريخ (ميلادية) أيام شهر هجري كامل */
+    fun hijriMonth(year: Int, month: Int, offset: Int): List<LocalDate>? = runCatching {
+        val first = HijrahChronology.INSTANCE.date(year, month, 1)
+        val len = first.lengthOfMonth()
+        val start = LocalDate.from(first).minusDays(offset.toLong())
+        (0 until len).map { start.plusDays(it.toLong()) }
+    }.getOrNull()
+
+    fun occasion(month: Int, day: Int): String? = when {
+        month == 1 && day == 1 -> "رأس السنة الهجرية"
+        month == 1 && day == 9 -> "تاسوعاء (يُستحب صيامه)"
+        month == 1 && day == 10 -> "يوم عاشوراء (يُستحب صيامه)"
+        month == 3 && day == 12 -> "ذكرى المولد النبوي"
+        month == 7 && day == 27 -> "ذكرى الإسراء والمعراج"
+        month == 9 && day == 1 -> "أول أيام رمضان"
+        month == 9 && day == 21 -> "بداية العشر الأواخر من رمضان"
+        month == 10 && day == 1 -> "عيد الفطر"
+        month == 12 && day == 1 -> "بداية العشر الأوائل من ذي الحجة"
+        month == 12 && day == 9 -> "يوم عرفة (يُستحب صيامه لغير الحاج)"
+        month == 12 && day == 10 -> "عيد الأضحى"
+        month == 12 && day in 11..13 -> "أيام التشريق"
+        month != 9 && month != 12 && day == 13 -> "بداية الأيام البيض (13–15) يُستحب صيامها"
+        else -> null
+    }
+
+    fun label(p: Prayer, date: LocalDate): String =
+        if (p == Prayer.DHUHR && date.dayOfWeek == DayOfWeek.FRIDAY) "الجمعة" else p.ar
+
+    fun nextPrayer(s: Settings, now: ZonedDateTime): Pair<Prayer, ZonedDateTime>? {
+        for (off in 0..1) {
+            val day = forSettings(now.toLocalDate().plusDays(off.toLong()), s) ?: continue
+            val c = day.entries.firstOrNull { it.key.notifiable && it.value.isAfter(now) }
+            if (c != null) return c.key to c.value
+        }
+        return null
     }
 
     fun forSettings(date: LocalDate, s: Settings): Map<Prayer, ZonedDateTime>? {
         val zone = runCatching { ZoneId.of(s.tz) }.getOrDefault(ZoneId.systemDefault())
         val method = methods.getOrElse(s.method) { methods[0] }
-        return compute(date, s.lat, s.lon, zone, method, s.hanafi)
+        val base = compute(date, s.lat, s.lon, zone, method, s.hanafi) ?: return null
+        if (s.adjust.isEmpty()) return base
+        val out = LinkedHashMap<Prayer, ZonedDateTime>()
+        for ((p, t) in base) out[p] = t.plusMinutes((s.adjust[p.name] ?: 0).toLong())
+        return out
     }
 
     fun compute(

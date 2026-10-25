@@ -3,6 +3,7 @@
 package com.mawaqiti.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,12 +19,12 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.WbTwilight
@@ -37,14 +38,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import java.time.DayOfWeek
 import java.time.Duration
-import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -53,9 +53,14 @@ import java.util.Locale
 
 val Gold = Color(0xFFC8A24A)
 
+/** mode: 0 النظام، 1 فاتح، 2 داكن */
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun AppTheme(mode: Int, content: @Composable () -> Unit) {
+    val dark = when (mode) {
+        1 -> false
+        2 -> true
+        else -> isSystemInDarkTheme()
+    }
     val scheme = if (dark) {
         darkColorScheme(
             primary = Color(0xFF6FD3A3), onPrimary = Color(0xFF003822),
@@ -86,6 +91,7 @@ fun AppTheme(content: @Composable () -> Unit) {
 fun MawaqitiApp(vm: PrayerViewModel) {
     val ctx = LocalContext.current
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var moreSub by rememberSaveable { mutableIntStateOf(0) }
 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val requestNotif: () -> Unit = {
@@ -118,17 +124,17 @@ fun MawaqitiApp(vm: PrayerViewModel) {
                 NavigationBarItem(tab == 1, { tab = 1 }, { Icon(Icons.Filled.Explore, null) }, label = { Text("القبلة") })
                 NavigationBarItem(tab == 2, { tab = 2 }, { Icon(Icons.Filled.MenuBook, null) }, label = { Text("الأذكار") })
                 NavigationBarItem(tab == 3, { tab = 3 }, { Icon(Icons.Filled.TouchApp, null) }, label = { Text("المسبحة") })
-                NavigationBarItem(tab == 4, { tab = 4 }, { Icon(Icons.Filled.SettingsIcon, null) }, label = { Text("الإعدادات") })
+                NavigationBarItem(tab == 4, { tab = 4 }, { Icon(Icons.Filled.MoreHoriz, null) }, label = { Text("المزيد") })
             }
         }
     ) { pad ->
         Box(Modifier.padding(pad)) {
             when (tab) {
-                0 -> TimesScreen(vm, requestGps, requestNotif) { tab = 4 }
+                0 -> TimesScreen(vm, requestGps, requestNotif) { moreSub = 1; tab = 4 }
                 1 -> QiblaScreen(vm)
-                2 -> AzkarScreen()
+                2 -> AzkarScreen(vm)
                 3 -> TasbeehScreen(vm)
-                else -> SettingsScreen(vm, requestGps, requestNotif)
+                else -> MoreScreen(vm, moreSub, { moreSub = it }, requestGps, requestNotif)
             }
         }
     }
@@ -148,7 +154,8 @@ private fun prayerIcon(p: Prayer): ImageVector = when (p) {
 @Composable
 fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: () -> Unit, onOpenSettings: () -> Unit) {
     val s = vm.settings
-    val zone = remember(s.tz) { runCatching { ZoneId.of(s.tz) }.getOrDefault(ZoneId.systemDefault()) }
+    val ctx = LocalContext.current
+    val zone = remember(s.tz) { vm.zone() }
     var now by remember(zone) { mutableStateOf(ZonedDateTime.now(zone)) }
     LaunchedEffect(zone) {
         while (true) {
@@ -169,7 +176,7 @@ fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: (
     val dateText = remember(now.toLocalDate()) {
         now.format(DateTimeFormatter.ofPattern("EEEE، d MMMM yyyy", Locale("ar")))
     }
-    val hijriText = remember(now.toLocalDate()) { PrayerCalc.hijriText(now.toLocalDate()) }
+    val hijriText = PrayerCalc.hijriText(now.toLocalDate(), s.hijriOffset)
 
     LazyColumn(
         Modifier.fillMaxSize().statusBarsPadding(),
@@ -177,17 +184,32 @@ fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: (
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
-            Column {
-                Text("مواقيتي", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(dateText, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (hijriText.isNotBlank()) Text(hijriText, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
-                Row(
-                    Modifier.padding(top = 4.dp).clickable { onOpenSettings() },
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.LocationOn, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(4.dp))
-                    Text(s.place, color = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    Text("مواقيتي", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(dateText, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (hijriText.isNotBlank()) Text(hijriText, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+                    Row(
+                        Modifier.padding(top = 4.dp).clickable { onOpenSettings() },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.LocationOn, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(4.dp))
+                        Text(s.place, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                if (today != null) {
+                    IconButton(onClick = {
+                        val body = today.entries.joinToString("\n") {
+                            "${PrayerCalc.label(it.key, it.value.toLocalDate())}: ${it.value.format(fmt)}"
+                        }
+                        val text = "مواقيت الصلاة – ${s.place}\n$dateText\n$hijriText\n\n$body"
+                        val i = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, text)
+                        }
+                        ctx.startActivity(Intent.createChooser(i, null))
+                    }) { Icon(Icons.Filled.Share, "مشاركة المواقيت") }
                 }
             }
         }
@@ -220,13 +242,11 @@ fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: (
                         val secs = Duration.between(now, next.second).seconds.coerceAtLeast(0)
                         Text("الصلاة القادمة", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
                         Text(
-                            next.first.ar, fontSize = 34.sp, fontWeight = FontWeight.Bold,
+                            PrayerCalc.label(next.first, next.second.toLocalDate()),
+                            fontSize = 34.sp, fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimary
                         )
-                        Text(
-                            next.second.format(fmt), fontSize = 20.sp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
+                        Text(next.second.format(fmt), fontSize = 20.sp, color = MaterialTheme.colorScheme.onPrimary)
                         Spacer(Modifier.height(8.dp))
                         Text(
                             String.format(Locale.US, "%02d:%02d:%02d", secs / 3600, (secs % 3600) / 60, secs % 60),
@@ -238,10 +258,22 @@ fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: (
             }
         }
 
+        if (now.dayOfWeek == DayOfWeek.FRIDAY) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                    Text(
+                        "يوم الجمعة: لا تنسَ قراءة سورة الكهف، والإكثار من الصلاة على النبي ﷺ، والاغتسال والتبكير إلى الجمعة.",
+                        Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
+
         if (today != null) {
             items(today.entries.toList(), key = { it.key.name }) { (p, time) ->
                 val isNext = next != null && next.first == p && next.second == time
                 val passed = time.isBefore(now)
+                val alpha = if (passed) 0.55f else 1f
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = if (isNext) MaterialTheme.colorScheme.primaryContainer
@@ -258,14 +290,14 @@ fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: (
                         )
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            p.ar, Modifier.weight(1f), fontSize = 20.sp,
+                            PrayerCalc.label(p, time.toLocalDate()), Modifier.weight(1f), fontSize = 20.sp,
                             fontWeight = if (isNext) FontWeight.Bold else FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (passed) 0.55f else 1f)
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
                         )
                         Text(
                             time.format(fmt), fontSize = 20.sp,
                             fontWeight = if (isNext) FontWeight.Bold else FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (passed) 0.55f else 1f)
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
                         )
                         if (p.notifiable) {
                             val on = p.name in s.notify
@@ -286,149 +318,5 @@ fun TimesScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: (
                 }
             }
         }
-    }
-}
-
-// ───────────────────────── Settings ─────────────────────────
-
-@Composable
-private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            content()
-        }
-    }
-}
-
-@Composable
-fun SettingsScreen(vm: PrayerViewModel, onRequestGps: () -> Unit, onRequestNotif: () -> Unit) {
-    val s = vm.settings
-    val ctx = LocalContext.current
-    var dialog by remember { mutableIntStateOf(0) } // 1 مدينة، 2 طريقة
-
-    LazyColumn(
-        Modifier.fillMaxSize().statusBarsPadding(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item { Text("الإعدادات", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-
-        item {
-            SectionCard("الموقع") {
-                Text(s.place, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    String.format(Locale.US, "%.3f ، %.3f", s.lat, s.lon),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (vm.locating) LinearProgressIndicator(Modifier.fillMaxWidth())
-                vm.locationMsg?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onRequestGps) {
-                        Icon(Icons.Filled.MyLocation, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("تحديد تلقائي")
-                    }
-                    OutlinedButton(onClick = { dialog = 1 }) { Text("اختيار مدينة") }
-                }
-            }
-        }
-
-        item {
-            SectionCard("طريقة الحساب") {
-                Text(PrayerCalc.methods.getOrElse(s.method) { PrayerCalc.methods[0] }.name)
-                OutlinedButton(onClick = { dialog = 2 }) { Text("تغيير الطريقة") }
-                Text("وقت العصر", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = !s.hanafi, onClick = { vm.update(s.copy(hanafi = false)) }, label = { Text("الجمهور (ظل المثل)") })
-                    FilterChip(selected = s.hanafi, onClick = { vm.update(s.copy(hanafi = true)) }, label = { Text("الحنفي (ظل المثلين)") })
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("نظام 24 ساعة", Modifier.weight(1f))
-                    Switch(checked = s.use24h, onCheckedChange = { vm.update(s.copy(use24h = it)) })
-                }
-            }
-        }
-
-        item {
-            SectionCard("تنبيهات الصلاة") {
-                Prayer.values().filter { it.notifiable }.forEach { p ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(p.ar, Modifier.weight(1f), fontSize = 17.sp)
-                        Switch(
-                            checked = p.name in s.notify,
-                            onCheckedChange = {
-                                vm.update(s.copy(notify = if (it) s.notify + p.name else s.notify - p.name))
-                                if (it) onRequestNotif()
-                            }
-                        )
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onRequestNotif) { Text("السماح بالإشعارات") }
-                    OutlinedButton(onClick = {
-                        onRequestNotif()
-                        Notifier.show(ctx, Prayer.DHUHR)
-                    }) { Text("اختبار التنبيه") }
-                }
-                Text(
-                    "إن لم تصلك التنبيهات في وقتها، استثنِ التطبيق من «توفير البطارية» في إعدادات الهاتف.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        item {
-            Text(
-                "تُحسب المواقيت داخل الهاتف دون إنترنت. يُنصح بمطابقتها مع تقويم الجهة الدينية في بلدك.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-            )
-        }
-    }
-
-    if (dialog == 1) {
-        AlertDialog(
-            onDismissRequest = { dialog = 0 },
-            confirmButton = { TextButton(onClick = { dialog = 0 }) { Text("إغلاق") } },
-            title = { Text("اختر المدينة") },
-            text = {
-                LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(Cities, key = { it.name }) { c ->
-                        Text(
-                            c.name,
-                            fontWeight = if (c.name == s.place) FontWeight.Bold else FontWeight.Normal,
-                            color = if (c.name == s.place) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.fillMaxWidth()
-                                .clickable { vm.selectCity(c); dialog = 0 }
-                                .padding(vertical = 12.dp, horizontal = 4.dp)
-                        )
-                    }
-                }
-            }
-        )
-    }
-    if (dialog == 2) {
-        AlertDialog(
-            onDismissRequest = { dialog = 0 },
-            confirmButton = { TextButton(onClick = { dialog = 0 }) { Text("إغلاق") } },
-            title = { Text("طريقة الحساب") },
-            text = {
-                Column {
-                    PrayerCalc.methods.forEachIndexed { i, m ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { vm.update(s.copy(method = i)); dialog = 0 },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = s.method == i, onClick = { vm.update(s.copy(method = i)); dialog = 0 })
-                            Text(m.name)
-                        }
-                    }
-                }
-            }
-        )
     }
 }

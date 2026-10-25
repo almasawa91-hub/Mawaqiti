@@ -11,8 +11,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            AppTheme {
-                val vm: PrayerViewModel = viewModel()
+            val vm: PrayerViewModel = viewModel()
+            AppTheme(vm.settings.theme) {
                 MawaqitiApp(vm)
             }
         }
